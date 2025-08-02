@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: qreserve
+      POSTGRES_USER: qreserve
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qreserve"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - qreserve-network
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - qreserve-network
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://qreserve:${POSTGRES_PASSWORD}@postgres:5432/qreserve
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=${SECRET_KEY}
+      - DEBUG=false
+      - ENVIRONMENT=production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./uploads:/app/uploads
+    networks:
+      - qreserve-network
+    restart: unless-stopped
+
+  celery:
+    build: .
+    environment:
+      - DATABASE_URL=postgresql://qreserve:${POSTGRES_PASSWORD}@postgres:5432/qreserve
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=${SECRET_KEY}
+      - DEBUG=false
+      - ENVIRONMENT=production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./uploads:/app/uploads
+    networks:
+      - qreserve-network
+    restart: unless-stopped
+    command: celery -A backend.app.core.celery worker --loglevel=info
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - app
+    networks:
+      - qreserve-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  qreserve-network:
+    driver: bridge 
